@@ -963,25 +963,35 @@
   for (let i = 0; i < 6; i++) setTimeout(spawnSparkle, i * 400);
 })();
 
-// ===== CLOUD STORAGE HELPERS =====
-// All data is stored in shared cloud storage so ALL devices see the same content.
-async function cloudGet(key) {
+// ===== JSONBIN CLOUD STORAGE =====
+const JSONBIN_BIN_ID = '6a26b0fbf5f4af5e29cb152f';
+const JSONBIN_KEY    = '$2a$10$DAk/vxwBzmKdeaun3zcsBO5Q1JTMqRLRDWLglhzzpDrAsbMD2hj7m';
+const JSONBIN_URL    = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+
+async function cloudLoad() {
   try {
-    const r = await window.storage.get(key, true);
-    return r ? r.value : null;
-  } catch(e) { return null; }
-}
-async function cloudSet(key, value) {
-  try { await window.storage.set(key, value, true); } catch(e) { console.error('Save failed', e); }
-}
-async function cloudDel(key) {
-  try { await window.storage.delete(key, true); } catch(e) {}
+    const res = await fetch(JSONBIN_URL + '/latest', {
+      headers: { 'X-Master-Key': JSONBIN_KEY }
+    });
+    const json = await res.json();
+    return json.record || {};
+  } catch(e) { console.error('Cloud load failed', e); return {}; }
 }
 
-// ===== DATA =====
+async function cloudSave(data) {
+  try {
+    await fetch(JSONBIN_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
+      body: JSON.stringify(data)
+    });
+  } catch(e) { console.error('Cloud save failed', e); }
+}
+
+// In-memory state (loaded from cloud on init)
 let adminPassword = 'sweetbliss123';
 
-const DEFAULT_CAKES = [
+let cakes = [
   { id:1, name:'Classic Rose Cake', desc:'Vanilla sponge with rose buttercream & fresh florals', price:'2,500', emoji:'🌹', isNew:true },
   { id:2, name:'Chocolate Truffle', desc:'Rich dark chocolate layers with ganache drip', price:'2,800', emoji:'🍫', isNew:false },
   { id:3, name:'Strawberry Dream', desc:'Light chiffon cake with fresh strawberry filling', price:'2,200', emoji:'🍓', isNew:false },
@@ -989,46 +999,39 @@ const DEFAULT_CAKES = [
   { id:5, name:'Lemon Elderflower', desc:'Zesty lemon curd with elderflower cream', price:'2,400', emoji:'🍋', isNew:false },
   { id:6, name:'Custom Celebration', desc:'Fully personalised — you choose everything!', price:'3,000+', emoji:'🎉', isNew:false },
 ];
-const DEFAULT_MASTERPIECES = [
+
+let masterpieces = [
   { id:1, emoji:'🎂' }, { id:2, emoji:'🌸' }, { id:3, emoji:'🍰' },
   { id:4, emoji:'✨' }, { id:5, emoji:'🎀' },
 ];
-const DEFAULT_SHOP = {
+
+let shopInfo = {
   tagline: 'Handcrafted with love in every layer',
   about: 'Hi, I\'m Uswah — the baker and heart behind SweetBliss.',
   whatsapp: '', location: '', hours: 'Mon–Sat: 9am – 8pm'
 };
 
-let cakes = [...DEFAULT_CAKES];
-let masterpieces = [...DEFAULT_MASTERPIECES];
-let shopInfo = { ...DEFAULT_SHOP };
 let orders = [];
+let storyImg = null;
 
-// Load all data from cloud on page load
+// Helper: get full current state object
+function getState() {
+  return { cakes, masterpieces, shopInfo, orders, storyImg, password: adminPassword };
+}
+
+// Load from cloud and refresh UI
 async function initCloudData() {
-  const [passVal, cakesVal, mpVal, shopVal, ordersVal, storyVal] = await Promise.all([
-    cloudGet('sb_pass'), cloudGet('sb_cakes'), cloudGet('sb_masterpieces'),
-    cloudGet('sb_shop'), cloudGet('sb_orders'), cloudGet('sb_story_img')
-  ]);
-  if (passVal) adminPassword = passVal;
-  if (cakesVal) { try { cakes = JSON.parse(cakesVal); } catch(e){} }
-  if (mpVal)    { try { masterpieces = JSON.parse(mpVal); } catch(e){} }
-  if (shopVal)  { try { shopInfo = JSON.parse(shopVal); } catch(e){} }
-  if (ordersVal){ try { orders = JSON.parse(ordersVal); } catch(e){} }
-  // Apply loaded data
+  const data = await cloudLoad();
+  if (data.cakes        && data.cakes.length)        cakes        = data.cakes;
+  if (data.masterpieces && data.masterpieces.length)  masterpieces = data.masterpieces;
+  if (data.shopInfo     && Object.keys(data.shopInfo).length) shopInfo = data.shopInfo;
+  if (data.orders)      orders   = data.orders;
+  if (data.storyImg)    storyImg = data.storyImg;
+  if (data.password)    adminPassword = data.password;
   renderCakes();
   renderGallery();
   applyShopInfo();
-  // Apply story image
-  const frontImg   = document.getElementById('about-story-img');
-  const frontEmoji = document.getElementById('about-cake-emoji');
-  if (storyVal) {
-    frontImg.src = storyVal; frontImg.style.display = 'block';
-    if (frontEmoji) frontEmoji.style.display = 'none';
-  } else {
-    frontImg.style.display = 'none';
-    if (frontEmoji) frontEmoji.style.display = '';
-  }
+  _applyStoryImg();
 }
 
 // ===== CROP ENGINE =====
@@ -1295,8 +1298,8 @@ function addCake() {
   renderAdminCakes();
 }
 
-function saveCakes() {
-  cloudSet('sb_cakes', JSON.stringify(cakes));
+async function saveCakes() {
+  await cloudSave(getState());
   renderCakes();
   showToast('Cakes & prices saved! ✨');
 }
@@ -1356,8 +1359,8 @@ function handleMpUpload(event) {
   event.target.value = '';
 }
 
-function saveMasterpieces() {
-  cloudSet('sb_masterpieces', JSON.stringify(masterpieces));
+async function saveMasterpieces() {
+  await cloudSave(getState());
   renderGallery();
   showToast('Gallery saved! ✨');
 }
@@ -1371,13 +1374,13 @@ function loadShopInfoFields() {
   document.getElementById('si-hours').value = shopInfo.hours || '';
 }
 
-function saveShopInfo() {
-  shopInfo.tagline = document.getElementById('si-tagline').value;
-  shopInfo.about = document.getElementById('si-about').value;
-  shopInfo.whatsapp = document.getElementById('si-whatsapp').value;
-  shopInfo.location = document.getElementById('si-location').value;
-  shopInfo.hours = document.getElementById('si-hours').value;
-  cloudSet('sb_shop', JSON.stringify(shopInfo));
+async function saveShopInfo() {
+  shopInfo.tagline   = document.getElementById('si-tagline').value;
+  shopInfo.about     = document.getElementById('si-about').value;
+  shopInfo.whatsapp  = document.getElementById('si-whatsapp').value;
+  shopInfo.location  = document.getElementById('si-location').value;
+  shopInfo.hours     = document.getElementById('si-hours').value;
+  await cloudSave(getState());
   applyShopInfo();
   showToast('Shop info updated! 🏪');
 }
@@ -1385,7 +1388,7 @@ function saveShopInfo() {
 function applyShopInfo() {
   if (shopInfo.whatsapp) document.getElementById('contact-whatsapp').textContent = shopInfo.whatsapp;
   if (shopInfo.location) document.getElementById('contact-location').textContent = shopInfo.location;
-  if (shopInfo.hours) document.getElementById('contact-hours').textContent = shopInfo.hours;
+  if (shopInfo.hours)    document.getElementById('contact-hours').textContent    = shopInfo.hours;
 }
 
 // ===== ORDERS =====
@@ -1410,18 +1413,18 @@ function renderOrders() {
 }
 
 // ===== ORDER FORM =====
-function submitOrder() {
-  const name = document.getElementById('f-name').value.trim();
-  const phone = document.getElementById('f-phone').value.trim();
-  const email = document.getElementById('f-email').value.trim();
-  const cake = document.getElementById('f-cake').value;
-  const date = document.getElementById('f-date').value;
+async function submitOrder() {
+  const name     = document.getElementById('f-name').value.trim();
+  const phone    = document.getElementById('f-phone').value.trim();
+  const email    = document.getElementById('f-email').value.trim();
+  const cake     = document.getElementById('f-cake').value;
+  const date     = document.getElementById('f-date').value;
   const servings = document.getElementById('f-servings').value;
-  const message = document.getElementById('f-message').value.trim();
+  const message  = document.getElementById('f-message').value.trim();
   if (!name || !phone || !cake || !date) { showToast('Please fill in all required fields ❗'); return; }
   const order = { name, phone, email, cake, date, servings, message, time: new Date().toLocaleString() };
   orders.push(order);
-  cloudSet('sb_orders', JSON.stringify(orders));
+  await cloudSave(getState());
   showToast('Order sent! We\'ll contact you within 24 hours 🎂');
   ['f-name','f-phone','f-email','f-date','f-servings','f-message'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('f-cake').selectedIndex = 0;
@@ -1468,13 +1471,13 @@ function showTab(tabId, el) {
   if (tabId === 'tab-masterpieces') renderAdminMasterpieces();
 }
 
-function changePassword() {
+async function changePassword() {
   const p1 = document.getElementById('new-pass').value;
   const p2 = document.getElementById('new-pass2').value;
   if (!p1) { showToast('Please enter a new password ❗'); return; }
   if (p1 !== p2) { showToast('Passwords do not match ❗'); return; }
   adminPassword = p1;
-  cloudSet('sb_pass', p1);
+  await cloudSave(getState());
   document.getElementById('new-pass').value = '';
   document.getElementById('new-pass2').value = '';
   showToast('Password updated! 🔒');
@@ -1489,24 +1492,25 @@ function showToast(msg) {
 }
 
 // ===== OUR STORY IMAGE =====
-async function loadStoryImg() {
-  const img = await cloudGet('sb_story_img');
-  const frontImg   = document.getElementById('about-story-img');
-  const frontEmoji = document.getElementById('about-cake-emoji');
-  const previewImg   = document.getElementById('story-img-preview-img');
-  const previewEmoji = document.getElementById('story-img-preview-emoji');
-  if (img) {
-    frontImg.src = img; frontImg.style.display = 'block';
-    if (frontEmoji) frontEmoji.style.display = 'none';
-    previewImg.src = img; previewImg.style.display = 'block';
+function _applyStoryImg() {
+  const frontImg    = document.getElementById('about-story-img');
+  const frontEmoji  = document.getElementById('about-cake-emoji');
+  const previewImg  = document.getElementById('story-img-preview-img');
+  const previewEmoji= document.getElementById('story-img-preview-emoji');
+  if (storyImg) {
+    frontImg.src = storyImg;   frontImg.style.display = 'block';
+    if (frontEmoji)  frontEmoji.style.display  = 'none';
+    previewImg.src = storyImg; previewImg.style.display = 'block';
     if (previewEmoji) previewEmoji.style.display = 'none';
   } else {
     frontImg.style.display = 'none';
-    if (frontEmoji) frontEmoji.style.display = '';
+    if (frontEmoji)  frontEmoji.style.display  = '';
     previewImg.style.display = 'none';
     if (previewEmoji) previewEmoji.style.display = '';
   }
 }
+
+function loadStoryImg() { _applyStoryImg(); }
 
 function handleStoryImgUpload(event) {
   const file = event.target.files[0];
@@ -1514,8 +1518,9 @@ function handleStoryImgUpload(event) {
   const reader = new FileReader();
   reader.onload = function(e) {
     openCropModal(e.target.result, async function(cropped) {
-      await cloudSet('sb_story_img', cropped);
-      loadStoryImg();
+      storyImg = cropped;
+      await cloudSave(getState());
+      _applyStoryImg();
       showToast('Our Story photo updated! 📷');
     });
   };
@@ -1524,13 +1529,13 @@ function handleStoryImgUpload(event) {
 }
 
 async function removeStoryImg() {
-  await cloudDel('sb_story_img');
-  loadStoryImg();
+  storyImg = null;
+  await cloudSave(getState());
+  _applyStoryImg();
   showToast('Story photo removed.');
 }
 
 // ===== INIT =====
-// Show defaults immediately, then load cloud data
 renderCakes();
 renderGallery();
 applyShopInfo();
