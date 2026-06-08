@@ -811,10 +811,11 @@
       <input type="password" id="admin-pass" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
       <p class="error" id="login-error">Incorrect password. Try again.</p>
       <button onclick="doLogin()">Login to Dashboard</button>
+
     </div>
 
     <!-- DASHBOARD -->
-    <div id="admin-dashboard" style="display:none; flex:1; overflow:hidden;">
+    <div id="admin-dashboard" style="display:none; flex:1; overflow:hidden; display:none;">
       <div class="admin-body">
         <div class="admin-sidebar">
           <div class="admin-nav-item active" onclick="showTab('tab-cakes',this)">🎂 Cakes & Prices</div>
@@ -940,30 +941,6 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// ===== IMGBB CONFIGURATION =====
-const IMGBB_API_KEY = "0c6888ac25a8a3540aef28592e542d92";
-
-// Helper function to upload base64/dataURL data to ImgBB
-function uploadToImgBB(dataUrl) {
-  // Extract pure base64 data from the dataURL
-  const base64Data = dataUrl.split(',')[1];
-  const formData = new FormData();
-  formData.append("image", base64Data);
-
-  return fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
-    method: "POST",
-    body: formData
-  })
-  .then(res => res.json())
-  .then(json => {
-    if (json.success && json.data && json.data.url) {
-      return json.data.url;
-    } else {
-      throw new Error(json.error ? json.error.message : "Upload failed");
-    }
-  });
-}
-
 // ===== SPARKLES =====
 (function() {
   const sparkles = ['✦','✧','⋆','✿','❀','❋','·','꩜'];
@@ -986,10 +963,25 @@ function uploadToImgBB(dataUrl) {
   for (let i = 0; i < 6; i++) setTimeout(spawnSparkle, i * 400);
 })();
 
-// ===== DATA =====
-let adminPassword = localStorage.getItem('sb_pass') || 'sweetbliss123';
+// ===== CLOUD STORAGE HELPERS =====
+// All data is stored in shared cloud storage so ALL devices see the same content.
+async function cloudGet(key) {
+  try {
+    const r = await window.storage.get(key, true);
+    return r ? r.value : null;
+  } catch(e) { return null; }
+}
+async function cloudSet(key, value) {
+  try { await window.storage.set(key, value, true); } catch(e) { console.error('Save failed', e); }
+}
+async function cloudDel(key) {
+  try { await window.storage.delete(key, true); } catch(e) {}
+}
 
-let cakes = JSON.parse(localStorage.getItem('sb_cakes') || 'null') || [
+// ===== DATA =====
+let adminPassword = 'sweetbliss123';
+
+const DEFAULT_CAKES = [
   { id:1, name:'Classic Rose Cake', desc:'Vanilla sponge with rose buttercream & fresh florals', price:'2,500', emoji:'🌹', isNew:true },
   { id:2, name:'Chocolate Truffle', desc:'Rich dark chocolate layers with ganache drip', price:'2,800', emoji:'🍫', isNew:false },
   { id:3, name:'Strawberry Dream', desc:'Light chiffon cake with fresh strawberry filling', price:'2,200', emoji:'🍓', isNew:false },
@@ -997,24 +989,47 @@ let cakes = JSON.parse(localStorage.getItem('sb_cakes') || 'null') || [
   { id:5, name:'Lemon Elderflower', desc:'Zesty lemon curd with elderflower cream', price:'2,400', emoji:'🍋', isNew:false },
   { id:6, name:'Custom Celebration', desc:'Fully personalised — you choose everything!', price:'3,000+', emoji:'🎉', isNew:false },
 ];
-
-let masterpieces = JSON.parse(localStorage.getItem('sb_masterpieces') || 'null') || [
-  { id:1, emoji:'🎂' },
-  { id:2, emoji:'🌸' },
-  { id:3, emoji:'🍰' },
-  { id:4, emoji:'✨' },
-  { id:5, emoji:'🎀' },
+const DEFAULT_MASTERPIECES = [
+  { id:1, emoji:'🎂' }, { id:2, emoji:'🌸' }, { id:3, emoji:'🍰' },
+  { id:4, emoji:'✨' }, { id:5, emoji:'🎀' },
 ];
-
-let shopInfo = JSON.parse(localStorage.getItem('sb_shop') || 'null') || {
+const DEFAULT_SHOP = {
   tagline: 'Handcrafted with love in every layer',
   about: 'Hi, I\'m Uswah — the baker and heart behind SweetBliss.',
-  whatsapp: '',
-  location: '',
-  hours: 'Mon–Sat: 9am – 8pm'
+  whatsapp: '', location: '', hours: 'Mon–Sat: 9am – 8pm'
 };
 
-let orders = JSON.parse(localStorage.getItem('sb_orders') || '[]');
+let cakes = [...DEFAULT_CAKES];
+let masterpieces = [...DEFAULT_MASTERPIECES];
+let shopInfo = { ...DEFAULT_SHOP };
+let orders = [];
+
+// Load all data from cloud on page load
+async function initCloudData() {
+  const [passVal, cakesVal, mpVal, shopVal, ordersVal, storyVal] = await Promise.all([
+    cloudGet('sb_pass'), cloudGet('sb_cakes'), cloudGet('sb_masterpieces'),
+    cloudGet('sb_shop'), cloudGet('sb_orders'), cloudGet('sb_story_img')
+  ]);
+  if (passVal) adminPassword = passVal;
+  if (cakesVal) { try { cakes = JSON.parse(cakesVal); } catch(e){} }
+  if (mpVal)    { try { masterpieces = JSON.parse(mpVal); } catch(e){} }
+  if (shopVal)  { try { shopInfo = JSON.parse(shopVal); } catch(e){} }
+  if (ordersVal){ try { orders = JSON.parse(ordersVal); } catch(e){} }
+  // Apply loaded data
+  renderCakes();
+  renderGallery();
+  applyShopInfo();
+  // Apply story image
+  const frontImg   = document.getElementById('about-story-img');
+  const frontEmoji = document.getElementById('about-cake-emoji');
+  if (storyVal) {
+    frontImg.src = storyVal; frontImg.style.display = 'block';
+    if (frontEmoji) frontEmoji.style.display = 'none';
+  } else {
+    frontImg.style.display = 'none';
+    if (frontEmoji) frontEmoji.style.display = '';
+  }
+}
 
 // ===== CROP ENGINE =====
 let cropState = {
@@ -1059,6 +1074,7 @@ function setCropAspect(w, h, btn) {
   document.querySelectorAll('.crop-aspect-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   cropState.aspect = { w, h, free: (w === 0) };
+  // reset box to full, snapped to aspect
   if (!cropState.aspect.free && cropState.img) {
     snapBoxToAspect();
     drawCropBox();
@@ -1123,6 +1139,7 @@ function doDrag(e) {
   let bw = Math.abs(dx);
   let bh = Math.abs(dy);
 
+  // clamp to image bounds
   bx = Math.max(0, Math.min(bx, cropState.imgNatW));
   by = Math.max(0, Math.min(by, cropState.imgNatH));
   bw = Math.min(bw, cropState.imgNatW - bx);
@@ -1135,6 +1152,7 @@ function doDrag(e) {
 function endDrag() {
   cropState.dragging = false;
   if (cropState.box.w < 10 || cropState.box.h < 10) {
+    // tiny drag = full image
     if (!cropState.aspect.free && cropState.aspect.w) {
       snapBoxToAspect();
     } else {
@@ -1256,18 +1274,10 @@ function handleImgUpload(event, i) {
   const reader = new FileReader();
   reader.onload = function(e) {
     openCropModal(e.target.result, function(cropped) {
-      showToast('Uploading cake image to internet... ⏳');
-      uploadToImgBB(cropped)
-      .then(url => {
-        cakes[i].image = url;
-        const preview = document.querySelector(`#crow-${i} .cake-row-img-preview`);
-        preview.innerHTML = `<img src="${url}" alt="cake">`;
-        showToast('Image uploaded online! Click 💾 Save to apply. 🌍');
-      })
-      .catch(err => {
-        console.error(err);
-        showToast('Upload failed! Try again. ❌');
-      });
+      cakes[i].image = cropped;
+      const preview = document.querySelector(`#crow-${i} .cake-row-img-preview`);
+      preview.innerHTML = `<img src="${cropped}" alt="cake">`;
+      showToast('Image cropped & ready! Click 💾 Save to apply. 🖼️');
     });
   };
   reader.readAsDataURL(file);
@@ -1286,7 +1296,7 @@ function addCake() {
 }
 
 function saveCakes() {
-  localStorage.setItem('sb_cakes', JSON.stringify(cakes));
+  cloudSet('sb_cakes', JSON.stringify(cakes));
   renderCakes();
   showToast('Cakes & prices saved! ✨');
 }
@@ -1316,6 +1326,7 @@ function renderAdminMasterpieces() {
     grid.appendChild(div);
   });
 
+  // Add slot
   if (masterpieces.length < 9) {
     const add = document.createElement('div');
     add.className = 'mp-add-slot';
@@ -1331,22 +1342,14 @@ function handleMpUpload(event) {
   const reader = new FileReader();
   reader.onload = function(e) {
     openCropModal(e.target.result, function(cropped) {
-      showToast('Uploading Masterpiece online... ⏳');
-      uploadToImgBB(cropped)
-      .then(url => {
-        if (pendingMpSlot !== null && pendingMpSlot < masterpieces.length) {
-          masterpieces[pendingMpSlot].image = url;
-          delete masterpieces[pendingMpSlot].emoji;
-        } else {
-          masterpieces.push({ id: Date.now(), image: url });
-        }
-        renderAdminMasterpieces();
-        showToast('Masterpiece uploaded! Click 💾 Save Gallery. 🌍');
-      })
-      .catch(err => {
-        console.error(err);
-        showToast('Upload failed! ❌');
-      });
+      if (pendingMpSlot !== null && pendingMpSlot < masterpieces.length) {
+        masterpieces[pendingMpSlot].image = cropped;
+        delete masterpieces[pendingMpSlot].emoji;
+      } else {
+        masterpieces.push({ id: Date.now(), image: cropped });
+      }
+      renderAdminMasterpieces();
+      showToast('Masterpiece added! Click 💾 Save Gallery. 🖼️');
     });
   };
   reader.readAsDataURL(file);
@@ -1354,7 +1357,7 @@ function handleMpUpload(event) {
 }
 
 function saveMasterpieces() {
-  localStorage.setItem('sb_masterpieces', JSON.stringify(masterpieces));
+  cloudSet('sb_masterpieces', JSON.stringify(masterpieces));
   renderGallery();
   showToast('Gallery saved! ✨');
 }
@@ -1374,7 +1377,7 @@ function saveShopInfo() {
   shopInfo.whatsapp = document.getElementById('si-whatsapp').value;
   shopInfo.location = document.getElementById('si-location').value;
   shopInfo.hours = document.getElementById('si-hours').value;
-  localStorage.setItem('sb_shop', JSON.stringify(shopInfo));
+  cloudSet('sb_shop', JSON.stringify(shopInfo));
   applyShopInfo();
   showToast('Shop info updated! 🏪');
 }
@@ -1418,7 +1421,7 @@ function submitOrder() {
   if (!name || !phone || !cake || !date) { showToast('Please fill in all required fields ❗'); return; }
   const order = { name, phone, email, cake, date, servings, message, time: new Date().toLocaleString() };
   orders.push(order);
-  localStorage.setItem('sb_orders', JSON.stringify(orders));
+  cloudSet('sb_orders', JSON.stringify(orders));
   showToast('Order sent! We\'ll contact you within 24 hours 🎂');
   ['f-name','f-phone','f-email','f-date','f-servings','f-message'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('f-cake').selectedIndex = 0;
@@ -1433,18 +1436,6 @@ function openAdmin() {
   document.getElementById('login-error').style.display = 'none';
 }
 
-// Update script name to show credit
-function checkDashboardCredit() {
-  const sidebar = document.querySelector('.admin-sidebar');
-  if(sidebar && !document.getElementById('anas-credit')) {
-    const creditDiv = document.createElement('div');
-    creditDiv.id = 'anas-credit';
-    creditDiv.style.cssText = 'font-size:0.65rem; text-align:center; color:var(--muted); padding:1rem 0; margin-top:2rem; border-top:1px dashed rgba(244,184,203,0.4); font-family:sans-serif;';
-    creditDiv.innerHTML = 'Dashboard Managed by:<br><b>Anas Ansari</b>';
-    sidebar.appendChild(creditDiv);
-  }
-}
-
 function closeAdmin() { document.getElementById('admin-overlay').classList.remove('open'); }
 
 function doLogin() {
@@ -1457,7 +1448,6 @@ function doLogin() {
     loadShopInfoFields();
     renderOrders();
     loadStoryImg();
-    checkDashboardCredit();
   } else {
     document.getElementById('login-error').style.display = 'block';
   }
@@ -1484,7 +1474,7 @@ function changePassword() {
   if (!p1) { showToast('Please enter a new password ❗'); return; }
   if (p1 !== p2) { showToast('Passwords do not match ❗'); return; }
   adminPassword = p1;
-  localStorage.setItem('sb_pass', p1);
+  cloudSet('sb_pass', p1);
   document.getElementById('new-pass').value = '';
   document.getElementById('new-pass2').value = '';
   showToast('Password updated! 🔒');
@@ -1499,8 +1489,8 @@ function showToast(msg) {
 }
 
 // ===== OUR STORY IMAGE =====
-function loadStoryImg() {
-  const img = localStorage.getItem('sb_story_img');
+async function loadStoryImg() {
+  const img = await cloudGet('sb_story_img');
   const frontImg   = document.getElementById('about-story-img');
   const frontEmoji = document.getElementById('about-cake-emoji');
   const previewImg   = document.getElementById('story-img-preview-img');
@@ -1523,35 +1513,28 @@ function handleStoryImgUpload(event) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = function(e) {
-    openCropModal(e.target.result, function(cropped) {
-      showToast('Uploading Story image online... ⏳');
-      uploadToImgBB(cropped)
-      .then(url => {
-        localStorage.setItem('sb_story_img', url);
-        loadStoryImg();
-        showToast('Our Story photo updated online! 🌍');
-      })
-      .catch(err => {
-        console.error(err);
-        showToast('Upload failed! ❌');
-      });
+    openCropModal(e.target.result, async function(cropped) {
+      await cloudSet('sb_story_img', cropped);
+      loadStoryImg();
+      showToast('Our Story photo updated! 📷');
     });
   };
   reader.readAsDataURL(file);
   event.target.value = '';
 }
 
-function removeStoryImg() {
-  localStorage.removeItem('sb_story_img');
+async function removeStoryImg() {
+  await cloudDel('sb_story_img');
   loadStoryImg();
   showToast('Story photo removed.');
 }
 
 // ===== INIT =====
+// Show defaults immediately, then load cloud data
 renderCakes();
 renderGallery();
 applyShopInfo();
-loadStoryImg();
+initCloudData();
 </script>
 </body>
 </html>
